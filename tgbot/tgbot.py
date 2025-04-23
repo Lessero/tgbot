@@ -1,49 +1,35 @@
 import logging
-import aiohttp
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 import random
+import aiohttp
 import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-def load_warn_replies(filename="warn_replies.txt"):
-    try:
-        with open(filename, "r", encoding="utf-8") as f:
-            return [line.strip() for line in f if line.strip()]
-    except Exception as e:
-        print(f"⚠️ Ошибка при загрузке файла с фразами: {e}")
-        return ["Кнопки тыкай, сюда не пиши!"]  # запасная фраза
-
-WARN_REPLIES = load_warn_replies()
-
-# Логирование
+# 🔹 Настройка логов
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-# Команда /start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
+# 🔹 Основная клавиатура
+def main_keyboard():
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("Скинь кота", callback_data="get_cat"),
             InlineKeyboardButton("Скинь цитату", callback_data="get_quote")
         ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    ])
+
+# 🔹 Команда /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Нажми одну из кнопок ниже:",
-        reply_markup=reply_markup
+        reply_markup=main_keyboard()
     )
 
-
-async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reply = random.choice(WARN_REPLIES)
-    await update.message.reply_text(reply)    
-
-# Обработка кнопок
+# 🔹 Обработка кнопок
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    logger.info("Нажата кнопка: %s", query.data)
+    logger.info(f"Нажата кнопка: {query.data}")
 
     if query.data == "get_cat":
         cat_url = await fetch_cat_url()
@@ -78,16 +64,21 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text="Не удалось получить цитату. Попробуй позже."
             )
 
-# Клавиатура с кнопками
-def main_keyboard():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Скинь кота", callback_data="get_cat"),
-            InlineKeyboardButton("Скинь цитату", callback_data="get_quote")
-        ]
-    ])
+# 🔹 Реакция на ручной ввод пользователя
+async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        filepath = os.path.join(base_path, "warn_replies.txt")
+        with open(filepath, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f if line.strip()]
+        reply = random.choice(lines)
+    except Exception as e:
+        reply = "Кнопки тыкай, сюда не пиши! (ошибка загрузки фраз)"
+        print(f"Ошибка при загрузке фраз: {e}")
 
-# Получение изображения кота
+    await update.message.reply_text(reply, reply_markup=main_keyboard())
+
+# 🔹 Получение URL кота
 async def fetch_cat_url():
     url = "https://api.thecatapi.com/v1/images/search"
     try:
@@ -101,7 +92,7 @@ async def fetch_cat_url():
         logger.error(f"Ошибка загрузки кота: {e}")
     return None
 
-# Получение цитаты с Forismatic
+# 🔹 Получение русской цитаты
 async def fetch_russian_quote():
     url = "https://api.forismatic.com/api/1.0/"
     params = {
@@ -109,14 +100,13 @@ async def fetch_russian_quote():
         "format": "json",
         "lang": "ru"
     }
-
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, params=params) as response:
                 if response.status == 200:
                     text = await response.text()
                     try:
-                        # Иногда API возвращает "неправильный" JSON с кавычками — почистим
+                        # Чистим кавычки (форизматик бывает кривой)
                         data = eval(text.replace('\r', '').replace('\n', ''))
                         return data.get("quoteText", "").strip(), data.get("quoteAuthor", "").strip()
                     except Exception as inner:
@@ -125,12 +115,14 @@ async def fetch_russian_quote():
         logger.error(f"Ошибка при получении цитаты: {e}")
     return None, None
 
-# Запуск бота
+# 🔹 Запуск бота
 def main():
     app = ApplicationBuilder().token("7524337590:AAFGIHlEr5EUWZXQEpfYMVVV3pEpuwzwgAc").build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button, pattern=".*"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, warn_user))
+
     print("Бот запущен!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
