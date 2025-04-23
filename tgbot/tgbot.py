@@ -1,5 +1,7 @@
 import os
 import logging
+import requests
+import random
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -21,10 +23,13 @@ logger = logging.getLogger(__name__)
 
 # Получение токенов из переменных окружения
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-# Инициализация клиента OpenAI
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Инициализация клиента DeepSeek
+client = OpenAI(
+    api_key=DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com"
+)
 
 # Главная клавиатура с кнопками
 def main_keyboard():
@@ -62,17 +67,43 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Нажата кнопка: {query.data}")
 
     if query.data == "get_cat":
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Вот изображение кота: 🐱",
-            reply_markup=main_keyboard()
-        )
+        try:
+            response = requests.get("https://api.thecatapi.com/v1/images/search")
+            data = response.json()
+            cat_image_url = data[0]["url"]
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=cat_image_url,
+                caption="Вот тебе котик! 🐱",
+                reply_markup=main_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при получении изображения кота: {e}")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Не удалось получить изображение кота.",
+                reply_markup=main_keyboard()
+            )
+
     elif query.data == "get_quote":
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Вот вдохновляющая цитата: \"Будь собой; все остальные роли уже заняты.\" — Оскар Уайльд",
-            reply_markup=main_keyboard()
-        )
+        try:
+            response = requests.get("https://api.forismatic.com/api/1.0/?method=getQuote&format=json&lang=ru")
+            data = response.json()
+            quote = data.get("quoteText", "Цитата недоступна.")
+            author = data.get("quoteAuthor", "Неизвестный автор")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"\"{quote}\"\n\n© {author}",
+                reply_markup=main_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при получении цитаты: {e}")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Не удалось получить цитату.",
+                reply_markup=main_keyboard()
+            )
+
     elif query.data == "reply_as_character":
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -83,53 +114,54 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Обработка пользовательских сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('awaiting_character'):
-        # Сохраняем имя персонажа и запрашиваем вопрос
         context.user_data['character_name'] = update.message.text
         context.user_data['awaiting_character'] = False
         context.user_data['awaiting_question'] = True
         await update.message.reply_text(f"Отлично! Теперь введите ваш вопрос для {update.message.text}:")
     elif context.user_data.get('awaiting_question'):
-        # Получаем вопрос и отправляем запрос к OpenAI
         character_name = context.user_data.get('character_name')
         question = update.message.text
         context.user_data['awaiting_question'] = False
 
-        # Формируем prompt для OpenAI
         prompt = f"Представь, что ты {character_name}. Ответь на следующий вопрос в его стиле: {question}"
 
-        # Отправляем запрос к OpenAI
-        response = await get_openai_response(prompt)
+        response = await get_deepseek_response(prompt)
 
         await update.message.reply_text(response, reply_markup=main_keyboard())
     else:
-        # Обычная реакция на сообщение
-        await update.message.reply_text(
-            "Пожалуйста, используйте кнопки для взаимодействия со мной.",
-            reply_markup=main_keyboard()
-        )
+        try:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            filepath = os.path.join(base_path, "warn_replies.txt")
+            with open(filepath, "r", encoding="utf-8") as f:
+                lines = [line.strip() for line in f if line.strip()]
+            reply = random.choice(lines)
+        except Exception as e:
+            reply = "Кнопки тыкай, сюда не пиши! (ошибка загрузки фраз)"
+            logger.error(f"Ошибка при загрузке фраз: {e}")
 
-# Функция для отправки запроса к OpenAI
-async def get_openai_response(prompt):
+        await update.message.reply_text(reply, reply_markup=main_keyboard())
+
+# Функция для отправки запроса к DeepSeek
+async def get_deepseek_response(prompt):
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="deepseek-chat",
             messages=[
                 {"role": "system", "content": "Вы — полезный помощник."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,
-            max_tokens=100
+            max_tokens=1000
         )
         return response.choices[0].message.content
     except Exception as e:
-        logger.error(f"Ошибка при обращении к OpenAI: {e}")
+        logger.error(f"Ошибка при обращении к DeepSeek: {e}")
         return "Произошла ошибка при получении ответа от AI."
 
 # Запуск бота
 def main():
-    # Проверка наличия токенов
-    if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
-        logger.error("Необходимо установить TELEGRAM_BOT_TOKEN и OPENAI_API_KEY в переменных окружения.")
+    if not TELEGRAM_BOT_TOKEN or not DEEPSEEK_API_KEY:
+        logger.error("Необходимо установить TELEGRAM_BOT_TOKEN и DEEPSEEK_API_KEY в переменных окружения.")
         return
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
