@@ -1,31 +1,69 @@
-# Импорт необходимых классов и функций из библиотеки
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+import aiohttp
 
-# Асинхронная функция, обрабатывающая команду /start
+# Логирование
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Отправка приветственного сообщения пользователю
-    await update.message.reply_text('Привет! Я эхо-бот. Отправь мне сообщение, и я повторю его.')
+    logger.info("Вызвана команда /start")
+    keyboard = [[InlineKeyboardButton("Скинь кота", callback_data="get_cat")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        'Привет! Нажми кнопку ниже, чтобы получить изображение кота.',
+        reply_markup=reply_markup
+    )
 
-# Асинхронная функция, обрабатывающая все текстовые сообщения
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Повторение полученного сообщения
-    await update.message.reply_text(update.message.text)
+# Обработка кнопки
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    logger.info("Нажата кнопка: %s", query.data)
 
-# Основная функция для запуска бота
+    if query.data == "get_cat":
+        cat_url = await fetch_cat_url()
+        if cat_url:
+            keyboard = [[InlineKeyboardButton("Скинь кота", callback_data="get_cat")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            caption = f"Вот твой котик 😺\nСсылка: {cat_url}"
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=cat_url,
+                caption=caption,
+                reply_markup=reply_markup
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Не удалось получить кота. Попробуй позже."
+            )
+
+# Получение URL картинки
+async def fetch_cat_url():
+    url = "https://api.thecatapi.com/v1/images/search"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data and isinstance(data, list) and "url" in data[0]:
+                        return data[0]["url"]
+    except Exception as e:
+        logger.error(f"Ошибка загрузки кота: {e}")
+    return None
+
+# Основной запуск
 def main():
-    # Создание приложения бота с использованием токена
-    app = ApplicationBuilder().token('7524337590:AAFGIHlEr5EUWZXQEpfYMVVV3pEpuwzwgAc').build()
+    app = ApplicationBuilder().token("7524337590:AAFGIHlEr5EUWZXQEpfYMVVV3pEpuwzwgAc").build()
 
-    # Добавление обработчика команды /start
-    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button, pattern="^get_cat$"))
 
-    # Добавление обработчика всех текстовых сообщений
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    print("Бот запущен!")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-    # Запуск бота
-    app.run_polling()
-
-# Проверка, что скрипт запускается напрямую
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
